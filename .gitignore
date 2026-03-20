@@ -1,0 +1,16 @@
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+*.rds
+*.csv.gz
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+results/*
+!results/.gitkeep
+reference/*.fa
+reference/*.fa.gz
+reference/*.fasta
+reference/*.fasta.gz
