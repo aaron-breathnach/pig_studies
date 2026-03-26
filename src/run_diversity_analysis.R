@@ -6,17 +6,36 @@ alpha_diversity <- function(genus_relab, metadata) {
     merge(metadata, by = "sample_id") %>%
     as_tibble()
   
-  pval <- lmerTest::lmer(
-    shannon_index ~ treatment * day + (1 | animal_id),
-    alpha
-  ) %>%
-    anova() %>%
-    as.data.frame() %>%
-    rownames_to_column("term") %>%
-    filter(grepl(":", term)) %>%
-    pull(7)
+  string <- "Interaction *p*-value: %s"
   
-  string <- "Interaction *p*-value = %s"
+  single_timepoint <- length(unique(alpha$day)) == 1
+  
+  if (single_timepoint) {
+    
+    pval <- lm(shannon_index ~ treatment, data = alpha) %>%
+      anova() %>%
+      drop_na() %>%
+      pull(5)
+    
+    xlab <- "Group"
+    p <- ggplot(alpha, aes(x = treatment, y = shannon_index))
+    
+  } else {
+    
+    pval <- lmerTest::lmer(
+      shannon_index ~ treatment * day + (1 | animal_id),
+      alpha
+    ) %>%
+      anova() %>%
+      as.data.frame() %>%
+      rownames_to_column("term") %>%
+      filter(grepl(":", term)) %>%
+      pull(7)
+    
+    xlab <- "Day"
+    p <- ggplot(alpha, aes(x = day, y = shannon_index))
+    
+  }
   
   if (pval >= 0.001) {
     title <- sprintf(
@@ -30,7 +49,7 @@ alpha_diversity <- function(genus_relab, metadata) {
     )
   }
   
-  ggplot(alpha, aes(x = day, y = shannon_index)) +
+  p +
     geom_boxplot(aes(colour = treatment), outlier.shape = NA) +
     geom_jitter(
       aes(colour = treatment, fill = treatment),
@@ -40,22 +59,22 @@ alpha_diversity <- function(genus_relab, metadata) {
     theme_classic(base_size = 12.5) +
     theme(
       axis.title = element_text(face = "bold"),
-      legend.title = element_text(face = "bold"),
+      legend.position = "none",
       plot.title = ggtext::element_markdown()
     ) +
     ggtitle(title) +
     labs(
-      x = "Day",
-      y = "Shannon index",
-      fill = "Treatment",
-      colour = "Treatment"
+      x = xlab,
+      y = "Shannon index"
     ) +
     scale_colour_manual(values = get_pal("treatment")) +
     scale_fill_manual(values = get_pal("treatment"))
   
 }
 
-make_adonis_plot <- function(veg_dis, metadata) {
+make_adonis_plot <- function(genus_relab, metadata) {
+  
+  veg_dis <- vegan::vegdist(genus_relab)
   
   data <- metadata %>%
     column_to_rownames("sample_id") %>%
@@ -72,6 +91,7 @@ make_adonis_plot <- function(veg_dis, metadata) {
     select(1, 4, 6) %>%
     drop_na() %>%
     dplyr::rename(p = 3) %>%
+    mutate(p = rstatix::p_round(p)) %>%
     mutate(term = term %>%
              str_replace("treatment", "Group") %>%
              str_replace("day", "Day")) %>%
@@ -102,16 +122,15 @@ make_pcoa_plot <- function(points, variable, facet, xlab, ylab, legend_title) {
     legend_title <- "Group"
   } else {
     n <- length(unique(points$day))
-    pal <- viridis::viridis(n)
-    legend_title = "Day"
+    pal <- get_pal("day")
+    legend_title <- "Day"
   }
   
   p_inp <- points %>%
     select(Axis.1, Axis.2, all_of(variable), all_of(facet)) %>%
     rename(variable = 3, facet = 4)
   
-  ggplot(p_inp, aes(x = Axis.1, y = Axis.2)) +
-    facet_wrap(~ facet, scales = "free") +
+  p <- ggplot(p_inp, aes(x = Axis.1, y = Axis.2)) +
     geom_point(aes(fill = variable), pch = 21, size = 3) +
     theme_bw(base_size = 12.5) +
     theme(
@@ -120,12 +139,23 @@ make_pcoa_plot <- function(points, variable, facet, xlab, ylab, legend_title) {
       panel.grid = element_blank(),
       strip.text = element_text(face = "bold")
     ) +
-    labs(x = xlab, y = ylab, fill = "Group") +
+    labs(x = xlab, y = ylab, fill = legend_title) +
     scale_fill_manual(values = pal)
+  
+  n <- length(unique(points$day))
+  
+  if (n > 1) {
+    p <- p +
+      facet_wrap(~ facet, scales = "free", ncol = 2)
+  }
+  
+  return(p)
   
 }
 
-viz_int_pig_dis <- function(veg_dis, metadata) {
+viz_int_pig_dis <- function(genus_relab, metadata) {
+  
+  veg_dis <- vegan::vegdist(genus_relab)
   
   remove <- metadata %>%
     group_by(animal_id, day) %>%
@@ -155,23 +185,44 @@ viz_int_pig_dis <- function(veg_dis, metadata) {
     select(treatment.x, animal_id.x, day.y, distance) %>%
     setNames(cols)
   
-  ggplot(p_inp, aes(x = day, y = distance)) +
-    geom_boxplot(aes(colour = treatment), outlier.shape = NA) +
-    geom_jitter(
-      aes(colour = treatment, fill = treatment),
-      position = position_jitterdodge(jitter.width = 0.25)
-    ) +
+  n <- length(unique(p_inp$day))
+  
+  if (n == 1) {
+    
+    p <- ggplot(p_inp, aes(x = treatment, y = distance)) +
+      geom_boxplot(aes(colour = treatment), outlier.shape = NA) +
+      geom_jitter(
+        aes(colour = treatment, fill = treatment)
+      )
+    
+    xlab <- "Group"
+    
+  } else {
+    
+    p <- ggplot(p_inp, aes(x = day, y = distance)) +
+      geom_boxplot(aes(colour = treatment), outlier.shape = NA) +
+      geom_jitter(
+        aes(colour = treatment, fill = treatment),
+        position = position_jitterdodge(jitter.width = 0.25)
+      )
+    
+    xlab <- "Day"
+    
+  }
+  
+  p +
     scale_colour_manual(values = get_pal("treatment")) +
     scale_fill_manual(values = get_pal("treatment")) +
-    labs(x = "Day", y = "Bray-Curtis distance", colour = "Group", fill = "Group") +
+    labs(x = xlab, y = "Bray-Curtis distance") +
     theme_classic(base_size = 12.5) +
     theme(
       axis.title = element_text(face = "bold"),
-      legend.title = element_text(face = "bold")
+      legend.position = "none"
     )
+  
 }
 
-beta_diversity <- function(genus_relab, metadata) {
+make_pcoa_plots <- function(genus_relab, metadata) {
   
   veg_dis <- vegan::vegdist(genus_relab)
   
@@ -189,32 +240,64 @@ beta_diversity <- function(genus_relab, metadata) {
     select(1:3) %>%
     inner_join(metadata, by = "sample_id")
   
-  p1 <- make_pcoa_plot(points, "treatment", "day", xlab, ylab)
-  p2 <- make_pcoa_plot(points, "day", "treatment", xlab, ylab)
+  n <- length(unique(points$day))
   
-  ## adonis bar chart
-  p3 <- make_adonis_plot(veg_dis, metadata)
+  if (n > 1) {
+    
+    p1 <- make_pcoa_plot(points, "treatment", "day", xlab, ylab)
+    p2 <- make_pcoa_plot(points, "day", "treatment", xlab, ylab)
+    
+    if (n > 2) {
+      
+      p <- patchwork::wrap_plots(
+        p1,
+        p2,
+        nrow = 2,
+        heights = c(2, 1)
+      )
+      
+    } else {
+      
+      p <- patchwork::wrap_plots(
+        patchwork::plot_spacer(),
+        p1,
+        p2,
+        patchwork::plot_spacer(),
+        nrow = 4,
+        heights = c(1, 2, 2, 1)
+      )
+      
+    }
+    
+  } else {
+    
+    data <- metadata %>%
+      column_to_rownames("sample_id")
+    
+    permanova <- vegan::adonis2(
+      veg_dis ~ treatment,
+      data = data
+    ) %>%
+      {.[1, 3:4]} %>%
+      as.numeric()
+    
+    title <- sprintf(
+      "PERMANOVA: *R*<sup>2</sup>=%s, *p*=%s",
+      round(permanova[1], 2),
+      round(permanova[2], 3)
+    )
+    
+    p <- make_pcoa_plot(points, "treatment", "day", xlab, ylab) +
+      theme(
+        axis.line = element_line(),
+        panel.border = element_blank(),
+        plot.title = ggtext::element_markdown()
+      ) +
+      ggtitle(title)
+    
+  }
   
-  ## Bray-Curtis pairwise distances
-  p4 <- viz_int_pig_dis(veg_dis, metadata)
-  
-  ## combine the plots
-  
-  top <- patchwork::wrap_plots(
-    p1,
-    p2,
-    heights = c(2, 1)
-  )
-  
-  bottom <- patchwork::wrap_plots(
-    p3,
-    p4,
-    nrow = 1
-  )
-  
-  patchwork::wrap_plots(top, bottom, heights = c(3, 1)) +
-    patchwork::plot_layout(guides = "collect") +
-    patchwork::plot_annotation(tag_levels = "A")
+  return(p)
   
 }
 
@@ -222,12 +305,40 @@ run_diversity_analysis <- function(features, taxonomy, metadata, out_dir) {
   
   genus_relab <- get_genus_relab(features, taxonomy, metadata)
   
-  filenames <- sprintf("%s/%s_diversity.png", out_dir, c("alpha", "beta"))
+  filename <- sprintf("%s/diversity.png", out_dir)
   
   p1 <- alpha_diversity(genus_relab, metadata)
-  ggsave(filenames[1], p1, width = 7.5, height = 5, bg = "white")
   
-  p2 <- beta_diversity(genus_relab, metadata)
-  ggsave(filenames[2], p2, width = 10, height = 15, bg = "white")
+  if (length(unique(metadata$day)) > 1) {
+    
+    p2 <- make_adonis_plot(genus_relab, metadata)
+    p3 <- viz_int_pig_dis(genus_relab, metadata)
+    p4_p5 <- make_pcoa_plots(genus_relab, metadata)
+    p1_p2_p3 <- patchwork::wrap_plots(p1, p2, p3, nrow = 3)
+    
+    p <- patchwork::wrap_plots(
+      p1_p2_p3,
+      p4_p5,
+      nrow = 1,
+      widths = c(1, 2)
+    ) +
+      patchwork::plot_annotation(tag_levels = "A") +
+      patchwork::plot_layout(guides = "collect")
+    
+    w <- 15
+    h <- 12.5
+    
+  } else {
+    
+    p2 <- make_pcoa_plots(genus_relab, metadata)
+    
+    p <- patchwork::wrap_plots(p1, p2)
+    
+    w <- 10
+    h <- 5
+    
+  }
+  
+  ggsave(filename, p, width = w, height = h, bg = "white")
   
 }

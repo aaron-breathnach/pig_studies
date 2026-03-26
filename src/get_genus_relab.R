@@ -17,7 +17,14 @@ tidy_genus_name <- function(x) {
   
 }
 
-get_genus_relab <- function(features, taxonomy, metadata, abundance = 0, prevalence = 0) {
+get_genus_relab <- function(
+    features,
+    taxonomy,
+    metadata,
+    abundance = 0,
+    prevalence = 0,
+    clr = FALSE
+) {
   
   tax <- taxonomy %>%
     dplyr::select(1, 2)
@@ -34,9 +41,11 @@ get_genus_relab <- function(features, taxonomy, metadata, abundance = 0, prevale
     group_by(sample_id) %>%
     mutate(relab = 100 * count / sum(count)) %>%
     ungroup() %>%
-    select(1, 2, 4)
+    select(1, 2, 4) %>%
+    pivot_wider(names_from = "genus", values_from = "relab", values_fill = 0)
   
   genera <- genus_relab %>%
+    pivot_longer(!sample_id, names_to = "genus", values_to = "relab") %>%
     filter(relab > abundance) %>%
     select(genus, sample_id) %>%
     distinct() %>%
@@ -46,9 +55,17 @@ get_genus_relab <- function(features, taxonomy, metadata, abundance = 0, prevale
     pull(genus)
   
   genus_relab <- genus_relab %>%
-    filter(genus %in% genera) %>%
-    pivot_wider(names_from = genus, values_from = relab, values_fill = 0) %>%
-    column_to_rownames("sample_id")
+    column_to_rownames("sample_id") %>%
+    as.data.frame()
+  
+  if (clr) {
+    genus_relab <- genus_relab %>%
+      compositions::clr() %>%
+      as.data.frame()
+  }
+  
+  genus_relab <- genus_relab %>%
+    select(all_of(genera))
   
   colnames(genus_relab) <- colnames(genus_relab) %>%
     purrr::map(function(x) tidy_genus_name(x)) %>%
