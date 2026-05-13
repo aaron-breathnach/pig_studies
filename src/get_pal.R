@@ -24,6 +24,19 @@ get_pal <- function(x) {
   
   names(palettes[["day"]]) <- days
   
+  palettes[["hygiene"]] <- c(c("Optimal" = "#9986A5", "Basic" = "#79402E"))
+  
+  palettes[["feeders_per_pen"]] <- c(c("One" = "#90D4CC", "Two" = "#BD3027"))
+  
+  palettes[["pigs_per_pen"]] <- c(c("Seven" = "#85D4E3", "Fourteen" = "#F4B5BD"))
+  
+  palettes[["timepoint"]] <- c(
+    "D0" = "#3B9AB2",
+    "D14" = "#78B7C5",
+    "D45" = "#EBCC2A",
+    "Finisher" = "#E1AF00"
+  )
+  
   return(palettes[[x]])
   
 }
