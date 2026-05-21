@@ -22,9 +22,10 @@ run_adonis2 <- function(veg_dis, metadata) {
     rownames_to_column("term") %>%
     as_tibble() %>%
     drop_na() %>%
-    mutate(term = term %>%
-             str_replace_all("_", " ") %>%
-             str_to_sentence()
+    mutate(
+      term = term %>%
+        str_replace_all("_", " ") %>%
+        str_to_sentence()
     ) %>%
     select(term, 4, 6) %>%
     rename(r2 = 2, p = 3) %>%
@@ -43,27 +44,21 @@ run_adonis2 <- function(veg_dis, metadata) {
     geom_text(aes(label = sprintf("p: %s", p)), hjust = -0.1) +
     scale_x_continuous(expand = expansion(mult = c(0.01, 0.25)))
   
-  list(adonis2, p)
-  
+  list(table = adonis2, plot = p)
 }
 
-make_pcoa_plot <- function(pcoa_df, var) {
+make_pcoa_plot <- function(pcoa_df, pcoa, var) {
   
   p_inp <- pcoa_df %>%
     select(Axis.1, Axis.2, all_of(var), timepoint) %>%
     rename(variable = 3)
   
-  if (var == "hygiene") {
-    legend_title <- "Hygiene"
-  }
-  
-  if (var == "feeders_per_pen") {
-    legend_title <- "Feeders per pen"
-  }
-  
-  if (var == "pigs_per_pen") {
-    legend_title <- "Pigs per pen"
-  }
+  legend_title <- case_when(
+    var == "hygiene" ~ "Hygiene",
+    var == "feeders_per_pen" ~ "Feeders per pen",
+    var == "pigs_per_pen" ~ "Pigs per pen",
+    TRUE ~ var
+  )
   
   xlab <- sprintf("PCoA 1 (%.2f%%)", pcoa$values$Relative_eig[1] * 100)
   ylab <- sprintf("PCoA 2 (%.2f%%)", pcoa$values$Relative_eig[2] * 100)
@@ -92,31 +87,25 @@ make_pcoa_plot <- function(pcoa_df, var) {
     ) +
     scale_colour_manual(values = get_pal(var)) +
     scale_fill_manual(values = get_pal(var))
-  
 }
 
 #####################################
 ## differential abundance analysis ##
 #####################################
 
-.viz_sig_gen <- function(gns, cnt, fdr, genus_relab, metadata, relab = TRUE, ann) {
+get_term_info <- function(term) {
+  case_when(
+    term == "hygiene" ~ "Hygiene",
+    term == "feeders_per_pen" ~ "Feeders per pen",
+    term == "pigs_per_pen" ~ "Pigs per pen",
+    TRUE ~ term
+  )
+}
+
+.viz_sig_gen <- function(gns, term, fdr, genus_relab, metadata, relab = TRUE, ann) {
   
-  print(cnt)
-  
-  if (cnt == "Basic - Optimal") {
-    var <- "hygiene"
-    legend_title <- "Hygiene"
-  }
-  
-  if (cnt == "One - Two") {
-    var <- "feeders_per_pen"
-    legend_title <- "Feeders per pen"
-  }
-  
-  if (cnt == "Seven - Fourteen") {
-    var <- "pigs_per_pen"
-    legend_title <- "Pigs per pen"
-  }
+  var <- term
+  legend_title <- get_term_info(term)
   
   p_inp <- genus_relab %>%
     as.data.frame() %>%
@@ -126,40 +115,42 @@ make_pcoa_plot <- function(pcoa_df, var) {
     rename(variable = 3, relab = 4)
   
   if (relab) {
-    
     min_val <- p_inp %>%
       filter(relab > 0) %>%
-      filter(relab == min(relab)) %>%
-      pull(relab)
+      summarise(min_val = min(relab, na.rm = TRUE)) %>%
+      pull(min_val)
     
-    p_inp$relab <- log(p_inp$relab + 0.5 * min_val)
+    if (!is.finite(min_val)) {
+      min_val <- 1e-06
+    }
+    
+    p_inp <- p_inp %>%
+      mutate(relab = log10(relab + 0.5 * min_val))
     
     title <- gns
-    
     y_lab <- "**log<sub>10</sub>(abundance)**"
     
   } else {
-    
     title <- NULL
-    
     y_lab <- "Shannon index"
-    
-    ann$fdr <- rstatix::p_format(ann$p.value)
-    
+    ann <- ann %>%
+      mutate(fdr = rstatix::p_format(p.value))
   }
   
-  ann$relab <- max(p_inp$relab) + 0.05 * (max(p_inp$relab) - min(p_inp$relab))
+  ann <- ann %>%
+    mutate(relab = max(p_inp$relab, na.rm = TRUE) + 0.05 * diff(range(p_inp$relab, na.rm = TRUE)))
   
   ggplot(p_inp, aes(x = timepoint, y = relab)) +
     geom_boxplot(aes(colour = variable), outlier.shape = NA) +
     geom_jitter(
       aes(colour = variable, fill = variable),
       position = position_jitterdodge(jitter.width = 0.25),
-      alpha = 0.5,
+      alpha = 0.5
     ) +
     geom_text(
       data = ann,
-      aes(x = timepoint, y = relab, label = fdr)
+      aes(x = timepoint, y = relab, label = fdr),
+      inherit.aes = FALSE
     ) +
     ggtitle(title) +
     labs(
@@ -179,17 +170,16 @@ make_pcoa_plot <- function(pcoa_df, var) {
       legend.title = element_text(face = "bold"),
       plot.subtitle = ggtext::element_markdown()
     )
-  
 }
 
 viz_sig_gen <- function(n, contrasts, genus_relab, metadata, ann) {
   
   gns <- contrasts[[n, "genus"]]
-  
+  term <- contrasts[[n, "term"]]
   cnt <- contrasts[[n, "contrast"]]
   
   ann <- ann %>%
-    filter(genus == gns & contrast == cnt)
+    filter(genus == gns, term == !!term, contrast == cnt)
   
   if (gns == "shannon_index") {
     relab <- FALSE
@@ -203,8 +193,7 @@ viz_sig_gen <- function(n, contrasts, genus_relab, metadata, ann) {
     rstatix::p_format() %>%
     sprintf("*q*-value: %s", .)
   
-  .viz_sig_gen(gns, cnt, fdr, genus_relab, metadata, relab, ann)
-  
+  .viz_sig_gen(gns, term, fdr, genus_relab, metadata, relab, ann)
 }
 
 run_mod <- function(genus, genus_relab, metadata) {
@@ -221,17 +210,20 @@ run_mod <- function(genus, genus_relab, metadata) {
   
   min_val <- inp %>%
     filter(relab > 0) %>%
-    filter(relab == min(relab)) %>%
-    pull(relab)
+    summarise(min_val = min(relab, na.rm = TRUE)) %>%
+    pull(min_val)
   
-  inp$relab <- log(inp$relab + 0.5 * min_val)
+  if (!is.finite(min_val)) {
+    min_val <- 1e-06
+  }
+  
+  inp <- inp %>%
+    mutate(relab = log10(relab + 0.5 * min_val))
   
   mod <- lmerTest::lmer(
     relab ~ timepoint + hygiene + pigs_per_pen + feeders_per_pen + (1 | pig_id),
     data = inp
   )
-  
-  broom.mixed::tidy(mod)
   
   # --- ANOVA ---
   anova_res <- mod %>%
@@ -240,20 +232,17 @@ run_mod <- function(genus, genus_relab, metadata) {
     rownames_to_column("term") %>%
     mutate(genus = genus)
   
-  # --- CONTRASTS ---
-  # hygiene
+  # --- PRIMARY CONTRASTS ---
   hygiene_contr <- emmeans::emmeans(mod, ~ hygiene) %>%
     emmeans::contrast(method = "pairwise") %>%
     as.data.frame() %>%
     mutate(term = "hygiene", genus = genus)
   
-  # pigs per pen
   pigs_contr <- emmeans::emmeans(mod, ~ pigs_per_pen) %>%
     emmeans::contrast(method = "pairwise") %>%
     as.data.frame() %>%
     mutate(term = "pigs_per_pen", genus = genus)
   
-  # feeders
   feeders_contr <- emmeans::emmeans(mod, ~ feeders_per_pen) %>%
     emmeans::contrast(method = "pairwise") %>%
     as.data.frame() %>%
@@ -262,45 +251,41 @@ run_mod <- function(genus, genus_relab, metadata) {
   contrasts_res <- bind_rows(hygiene_contr, pigs_contr, feeders_contr)
   
   # --- TIMEPOINT-SPECIFIC CONTRASTS ---
+  # These models are only used to annotate the plots with within-timepoint contrasts.
+  # The 'term' column is kept throughout so hygiene/feeders/pigs annotations cannot be mixed up.
   
   mod_hygiene <- lmerTest::lmer(
     relab ~ timepoint * hygiene + pigs_per_pen + feeders_per_pen + (1 | pig_id),
     data = inp
   )
   
-  sec_cnt_hygiene <- emmeans::emmeans(
-    mod_hygiene, ~ hygiene | timepoint
-  ) |>
+  sec_cnt_hygiene <- emmeans::emmeans(mod_hygiene, ~ hygiene | timepoint) %>%
     emmeans::contrast("pairwise") %>%
     as_tibble() %>%
     mutate(term = "hygiene", genus = genus) %>%
-    select(ncol(.), 1:(ncol(.) - 1))
+    select(genus, term, everything())
   
   mod_pigs_per_pen <- lmerTest::lmer(
     relab ~ timepoint * pigs_per_pen + hygiene + feeders_per_pen + (1 | pig_id),
     data = inp
   )
   
-  sec_cnt_pigs_per_pen <- emmeans::emmeans(
-    mod_pigs_per_pen, ~ pigs_per_pen | timepoint
-  ) |>
+  sec_cnt_pigs_per_pen <- emmeans::emmeans(mod_pigs_per_pen, ~ pigs_per_pen | timepoint) %>%
     emmeans::contrast("pairwise") %>%
     as_tibble() %>%
     mutate(term = "pigs_per_pen", genus = genus) %>%
-    select(ncol(.), 1:(ncol(.) - 1))
+    select(genus, term, everything())
   
   mod_feeders_per_pen <- lmerTest::lmer(
     relab ~ timepoint * feeders_per_pen + hygiene + pigs_per_pen + (1 | pig_id),
     data = inp
   )
   
-  sec_cnt_feeders_per_pen <- emmeans::emmeans(
-    mod_feeders_per_pen, ~ feeders_per_pen | timepoint
-  ) |>
+  sec_cnt_feeders_per_pen <- emmeans::emmeans(mod_feeders_per_pen, ~ feeders_per_pen | timepoint) %>%
     emmeans::contrast("pairwise") %>%
     as_tibble() %>%
     mutate(term = "feeders_per_pen", genus = genus) %>%
-    select(ncol(.), 1:(ncol(.) - 1))
+    select(genus, term, everything())
   
   sec_contrasts_res <- bind_rows(
     sec_cnt_hygiene,
@@ -308,25 +293,20 @@ run_mod <- function(genus, genus_relab, metadata) {
     sec_cnt_feeders_per_pen
   )
   
-  ## --- RESULTS ---
-  
   list(
     anova = anova_res,
     contrasts = contrasts_res,
     sec_contrasts = sec_contrasts_res
   )
-  
 }
 
 get_sig_gen <- function(anova_tab, contrasts_tab) {
-  
   unique(
     c(
-      filter(anova_tab, fdr <= 0.05 & term != "timepoint")$genus,
-      filter(contrasts_tab, fdr <= 0.05 & term != "timepoint")$genus
+      filter(anova_tab, fdr <= 0.05, term != "timepoint")$genus,
+      filter(contrasts_tab, fdr <= 0.05, term != "timepoint")$genus
     )
   )
-  
 }
 
 make_heatmap <- function(genus_relab, metadata) {
@@ -344,7 +324,7 @@ make_heatmap <- function(genus_relab, metadata) {
   )
   
   pheatmap::pheatmap(
-    log(t(genus_relab + 1e-06)),
+    log10(t(genus_relab + 1e-06)),
     color = viridis::viridis(100, option = "D"),
     show_colnames = FALSE,
     annotation_col = meta,
@@ -353,7 +333,6 @@ make_heatmap <- function(genus_relab, metadata) {
     cellwidth = 1,
     cellheight = 15
   )
-  
 }
 
 ###########################################
@@ -366,43 +345,44 @@ run_alpha_diversity_analysis <- function(mat, metadata) {
     as.data.frame() %>%
     rename(shannon_index = 1)
   
-  results <- run_mod("shannon_index", diversity, metadata)
+  div_results <- run_mod("shannon_index", diversity, metadata)
   
   cntrsts <- div_results$contrasts %>%
     filter(p.value <= 0.05)
   
   sec_con <- div_results$sec_contrasts
   
-  alpha_diversity_plots <- lapply(1:length(cntrsts), function(x) {
-    viz_sig_gen(
-      x,
-      cntrsts,
-      diversity,
-      metadata,
-      sec_con
+  if (nrow(cntrsts) > 0) {
+    alpha_diversity_plots <- lapply(seq_len(nrow(cntrsts)), function(x) {
+      viz_sig_gen(
+        x,
+        cntrsts,
+        diversity,
+        metadata,
+        sec_con
+      )
+    }) %>%
+      patchwork::wrap_plots(nrow = 2)
+    
+    ggsave(
+      "output/817/plots/alpha_diversity.png",
+      alpha_diversity_plots,
+      width = 7.5,
+      height = 7.5
     )
-  }) %>%
-    patchwork::wrap_plots(nrow = 2)
-  
-  ggsave(
-    "output/817/plots/alpha_diversity.png",
-    alpha_diversity_plots,
-    width = 7.5,
-    height = 7.5
-  )
-  
+  }
 }
 
 run_beta_diversity_analysis <- function(mat, metadata) {
   
-  veg_dis <- vegan::vegdist(genus_relab, method = "bray")
+  veg_dis <- vegan::vegdist(mat, method = "bray")
   
   adonis2 <- run_adonis2(veg_dis, metadata)
-  ggsave(adonis2[[2]], "output/817/plots/adonis2.png", width = 7.5, height = 5)
+  ggsave("output/817/plots/adonis2.png", adonis2$plot, width = 7.5, height = 5)
   
   pcoa <- ape::pcoa(veg_dis)
   
-  pcoa_df <- pcoa$vectors[,1:2] %>%
+  pcoa_df <- pcoa$vectors[, 1:2] %>%
     as.data.frame() %>%
     rownames_to_column("sample_id") %>%
     inner_join(metadata, by = "sample_id") %>%
@@ -411,11 +391,10 @@ run_beta_diversity_analysis <- function(mat, metadata) {
   variables <- c("hygiene", "feeders_per_pen", "pigs_per_pen")
   
   lapply(variables, function(var) {
-    p <- make_pcoa_plot(pcoa_df, var)
+    p <- make_pcoa_plot(pcoa_df, pcoa, var)
     filename <- sprintf("output/817/plots/pcoa_%s.png", var)
     ggsave(filename, p, width = 7.5, height = 5)
   })
-  
 }
 
 run_diversity_analysis <- function(mat, metadata) {
@@ -444,14 +423,20 @@ get_metadata <- function() {
     select(1, 11, 8, 9, 10, 5) %>%
     setNames(cols) %>%
     mutate(sample_id = gsub(".*\\.|.*_", "", sample_id)) %>%
-    mutate(timepoint = ifelse(grepl("Transfer", timepoint), "D45", timepoint) %>%
-             str_replace(" .*", "") %>%
-             factor(levels = c("D0", "D14", "D45", "Finisher"))) %>%
-    mutate(pigs_per_pen = str_to_sentence(english::english(pigs_per_pen)) %>%
-             factor(levels = c("Seven", "Fourteen"))) %>%
-    mutate(feeders_per_pen = str_to_sentence(english::english(feeders_per_pen)) %>%
-             factor(levels = c("One", "Two")))
-  
+    mutate(
+      timepoint = ifelse(grepl("Transfer", timepoint), "D45", timepoint) %>%
+        str_replace(" .*", "") %>%
+        factor(levels = c("D0", "D14", "D45", "Finisher"))
+    ) %>%
+    mutate(hygiene = factor(hygiene, levels = c("Basic", "Optimal"))) %>%
+    mutate(
+      pigs_per_pen = str_to_sentence(english::english(pigs_per_pen)) %>%
+        factor(levels = c("Seven", "Fourteen"))
+    ) %>%
+    mutate(
+      feeders_per_pen = str_to_sentence(english::english(feeders_per_pen)) %>%
+        factor(levels = c("One", "Two"))
+    )
 }
 
 ###############
@@ -495,7 +480,7 @@ anova_tab <- results %>%
 contrasts_tab <- results %>%
   lapply(function(x) x$contrasts) %>%
   bind_rows() %>%
-  group_by(contrast) %>%
+  group_by(term, contrast) %>%
   mutate(fdr = p.adjust(p.value, "BH")) %>%
   ungroup() %>%
   select(genus, everything()) %>%
@@ -506,11 +491,12 @@ sig_gen <- get_sig_gen(anova_tab, contrasts_tab)
 sec_contrasts_tab <- results %>%
   lapply(function(x) x$sec_contrasts) %>%
   bind_rows() %>%
-  group_by(contrast, timepoint) %>%
+  group_by(term, contrast, timepoint) %>%
   mutate(fdr = p.adjust(p.value, "BH")) %>%
   mutate(fdr = rstatix::p_format(fdr)) %>%
+  ungroup() %>%
   filter(genus %in% sig_gen) %>%
-  select(timepoint, genus, contrast, fdr)
+  select(timepoint, genus, term, contrast, fdr, everything())
 
 # Write three worksheets to one Excel file
 writexl::write_xlsx(
@@ -523,33 +509,35 @@ writexl::write_xlsx(
 )
 
 sig_cntrst <- contrasts_tab %>%
-  filter(fdr <= 0.05 & term != "timepoint")
+  filter(fdr <= 0.05, term != "timepoint")
 
-plot_list <- lapply(1:nrow(sig_cntrst), function(n) {
+if (nrow(sig_cntrst) > 0) {
   
-  var <- sig_cntrst[[n, "term"]]
+  plot_list <- lapply(seq_len(nrow(sig_cntrst)), function(n) {
+    
+    var <- sig_cntrst[[n, "term"]]
+    
+    out_dir <- sprintf("output/817/plots/sig_gen/%s", var)
+    dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+    
+    filename <- sig_cntrst[[n, "genus"]] %>%
+      str_replace_all("; ", ".") %>%
+      str_replace_all("/", "_") %>%
+      sprintf("%s/%s.png", out_dir, .)
+    
+    p <- viz_sig_gen(n, sig_cntrst, genus_relab, metadata, sec_contrasts_tab)
+    
+    ggsave(filename, p, width = 7.5, height = 5)
+    
+    return(p)
+  })
   
-  out_dir <- sprintf("output/817/plots/sig_gen/%s", var)
-  
-  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-  
-  filename <- sig_cntrst[[n, "genus"]] %>%
-    str_replace_all("; ", ".") %>%
-    sprintf("%s/%s.png", out_dir, .)
-  
-  p <- viz_sig_gen(n, sig_cntrst, genus_relab, metadata, sec_contrasts_tab)
-  
-  ggsave(filename, p, width = 7.5, height = 5)
-  
-  return(p)
-  
-})
+  pdf("output/817/plots/sig_genera.pdf", width = 7.5, height = 5)
+  print(plot_list)
+  dev.off()
+}
 
-pdf("output/817/plots/sig_genera.pdf", width = 7.5, height = 5)
-print(plot_list)
-dev.off()
-
-make_heatmap(genus_relab[,sig_gen], metadata)
+make_heatmap(genus_relab[, sig_gen, drop = FALSE], metadata)
 
 mat <- get_genus_relab(features, taxonomy, metadata, abundance = 0, prevalence = 0)
 
